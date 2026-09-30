@@ -1,19 +1,15 @@
 // 複数の画面で使う部品: アプリのマーク・ボタンのスタイル・ホバーの受け取り
 import SwiftUI
 
-/// アプリのマーク（角丸の四角に波形）
+/// アプリのマーク（アイコンと同じ、青から藍の M。素材は tools/app-icon.svg から作る）
 struct AppMark: View {
     var size: CGFloat
 
     var body: some View {
-        RoundedRectangle(cornerRadius: size * 0.3, style: .continuous)
-            .fill(LinearGradient(colors: [Color(red: 0.31, green: 0.49, blue: 1), Color(red: 0.61, green: 0.36, blue: 0.9)],
-                                 startPoint: .topLeading, endPoint: .bottomTrailing))
+        Image("AppMark")
+            .resizable()
             .frame(width: size, height: size)
-            .overlay {
-                Image(systemName: "waveform").font(.system(size: size * 0.5, weight: .semibold)).foregroundStyle(.white)
-            }
-            .shadow(color: Color(red: 0.31, green: 0.49, blue: 1).opacity(0.3), radius: size * 0.2, y: size * 0.08)
+            .shadow(color: Color(red: 0.22, green: 0.19, blue: 0.64).opacity(0.25), radius: size * 0.12, y: size * 0.06)
     }
 }
 
