@@ -115,6 +115,10 @@ final class TranscriptListView: NSView {
     private let spinner = NSProgressIndicator()
     /// 置いている帯（番号 i の帯は y が i × tileHeight から）
     private var tiles: [Int: TileLayer] = [:]
+    /// 処理中に届いた発言のフェードイン: 発言の番号 → 始めた時刻と、薄くする範囲の上端（その発言に行が増えたときは増えた所から）
+    private var fadeIns: [Int: (start: CFTimeInterval, fromY: CGFloat)] = [:]
+    private var fadeLink: CADisplayLink?
+    private static let fadeDuration: CFTimeInterval = 0.9
     private static let tileHeight: CGFloat = 512
 
     /// 描くときに足す注釈（ハイライトは始まりの順、ブックマークは発言の番号）
@@ -184,6 +188,7 @@ final class TranscriptListView: NSView {
         // 見た目の設定（色・見比べ・没入モード・文字の大きさ）が変わったら、全体を並べ直す
         let sameStyle = old.colors == new.colors && old.compare == new.compare && old.immersive == new.immersive && old.textSize == new.textSize
         let atBottom = isNearBottom, anchor = scrollAnchor()
+        let oldLastBottom = rows.last.map { $0.frame.maxY }
         document = new
         if sameStyle, old.blocks.count == new.blocks.count, rows.count == new.blocks.count, old.live == new.live,
            abs(laidOutWidth - bounds.width) <= 0.5 {
@@ -200,6 +205,7 @@ final class TranscriptListView: NSView {
             if let s = selection, max(s.anchor.block, s.head.block) >= first { clearSelection() }  // 選んでいた発言が変わった
             layoutRows(from: first)
         }
+        if new.live != nil, new.blocks.count >= old.blocks.count, sameStyle || old.blocks.isEmpty { fadeIn(from: old.blocks.count, lastBottom: oldLastBottom) }
         if atBottom, new.live != nil, !player.isPlaying {
             scroll(toY: .greatestFiniteMagnitude)
         } else if new.immersive, !old.immersive || old.blocks.isEmpty, let focus {
@@ -455,7 +461,7 @@ final class TranscriptListView: NSView {
         }
         var b = firstRow(atOrBelow: dirtyRect.minY)
         while b < rows.count, (rows[b].headings.first?.rect.minY ?? rows[b].background.minY) <= dirtyRect.maxY {
-            if !rows[b].hidden { drawRow(b, in: ctx, dirty: dirtyRect) }
+            if !rows[b].hidden { drawFading(b, in: ctx, dirty: dirtyRect) }
             b += 1
         }
         if let liveFrame, let liveLine, liveFrame.intersects(dirtyRect) {
@@ -464,6 +470,23 @@ final class TranscriptListView: NSView {
             CTLineDraw(liveLine, ctx)
         }
         if let b = hoveredGap, let r = gapRect(before: b), r.intersects(dirtyRect) { drawGap(r, in: ctx) }
+    }
+
+    /// 発言 b を描く。フェードイン中なら、薄くする範囲（fromY より下）を今の不透明度で描く
+    private func drawFading(_ b: Int, in ctx: CGContext, dirty: CGRect) {
+        guard let fade = fadeIns[b] else { return drawRow(b, in: ctx, dirty: dirty) }
+        let t = min(1, (CACurrentMediaTime() - fade.start) / Self.fadeDuration), alpha = 1 - pow(1 - t, 2)  // 始めは速く、終わりはゆっくり
+        if fade.fromY > dirty.minY {  // 前からあった所はそのまま
+            ctx.saveGState()
+            ctx.clip(to: CGRect(x: dirty.minX, y: dirty.minY, width: dirty.width, height: fade.fromY - dirty.minY))
+            drawRow(b, in: ctx, dirty: dirty)
+            ctx.restoreGState()
+        }
+        ctx.saveGState()
+        ctx.clip(to: CGRect(x: dirty.minX, y: max(dirty.minY, fade.fromY), width: dirty.width, height: dirty.maxY - max(dirty.minY, fade.fromY)))
+        ctx.setAlpha(alpha)
+        drawRow(b, in: ctx, dirty: dirty)
+        ctx.restoreGState()
     }
 
     private func drawRow(_ b: Int, in ctx: CGContext, dirty: CGRect) {
@@ -1229,6 +1252,30 @@ final class TranscriptListView: NSView {
         var rects = span(rows[b].words, local, local, in: rows[b].body, at: rows[b].bodyOrigin)
         if let o = rows[b].original { rects += span(o.words, local, local, in: o.body, at: o.origin) }
         for r in rects { redraw(r.insetBy(dx: -4, dy: -4)) }
+    }
+
+    /// 処理中に届いた発言をフェードインさせる: first から後ろの新しい発言は全体、その前の発言に行が増えていれば増えた所だけ
+    private func fadeIn(from first: Int, lastBottom: CGFloat?) {
+        let now = CACurrentMediaTime()
+        if first > 0, let lastBottom, rows.indices.contains(first - 1), rows[first - 1].frame.maxY > lastBottom + 0.5 {
+            fadeIns[first - 1] = (now, lastBottom)
+        }
+        for b in first..<rows.count where fadeIns[b] == nil { fadeIns[b] = (now, -.greatestFiniteMagnitude) }
+        guard !fadeIns.isEmpty, fadeLink == nil else { return }
+        fadeLink = displayLink(target: self, selector: #selector(stepFade))
+        fadeLink?.add(to: .main, forMode: .common)
+    }
+
+    @objc private func stepFade(_ link: CADisplayLink) {
+        let now = CACurrentMediaTime()
+        for (b, fade) in fadeIns {
+            redraw(block: b)
+            if now - fade.start >= Self.fadeDuration { fadeIns[b] = nil }  // 描き直しは済んだので、次からは普通に描く
+        }
+        if fadeIns.isEmpty {
+            link.invalidate()
+            fadeLink = nil
+        }
     }
 
     private func redraw(block b: Int) {
