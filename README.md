@@ -1,5 +1,3 @@
-<h1 align="center">Minutes</h1>
-
 <p align="center">
   会議の録音から、話者分離済みの文字起こしを作る Mac アプリ。処理はすべて Mac の中で完結する。
 </p>
