@@ -57,7 +57,9 @@ struct PlayerBar: View {
             .padding(.trailing, 12)
             .frame(height: 60)
         }
-        .frame(maxWidth: 980)
+        // 最小の幅は 0 にして、中身（ボタンの合計）の幅を外に伝えない。伝えると、右の注釈パネルとの分割の計算がぶつかり、
+        // ウィンドウのレイアウトが止まらなくなって落ちることがあった
+        .frame(minWidth: 0, maxWidth: 980)
         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(.separator))
         .shadow(color: .black.opacity(0.07), radius: 14, y: 4)
