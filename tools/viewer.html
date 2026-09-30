@@ -1,0 +1,139 @@
+<!doctype html>
+<!--
+  CLI の transcribe が出した transcript.json を見るための簡易ビューア（確認用）。
+  ブラウザーでこのファイルを開き、transcript.json と音声ファイルを選ぶ。ファイルはブラウザーの中で読むだけで、どこにも送らない。
+  - 発言ごとに、選ばれた話者と根拠（話者ごとの平均の発話確率）を出す
+  - 時間の重なりだけで決めた場合（WhisperX と同じ決め方）に別の話者になる発言には印を付ける
+  - 発言をクリックするとその位置から再生する
+-->
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Minutes ビューア</title>
+<style>
+  :root { --bg: #fff; --fg: #1d1d1f; --sub: #6e6e73; --line: #e5e5ea; --mark: #fff4e0; --now: #eef3ff; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #1c1c1e; --fg: #f2f2f7; --sub: #98989d; --line: #38383a; --mark: #3a2e1a; --now: #1f2a44; }
+  }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.6 -apple-system, "Hiragino Sans", sans-serif; }
+  header { position: sticky; top: 0; background: var(--bg); border-bottom: 1px solid var(--line); padding: 12px 16px; z-index: 1; }
+  header label { margin-right: 16px; color: var(--sub); }
+  #summary { margin-top: 6px; color: var(--sub); }
+  audio { width: 100%; margin-top: 8px; }
+  #timeline { position: relative; margin-top: 8px; cursor: pointer; }
+  .lane { position: relative; height: 10px; margin: 2px 0; background: var(--line); border-radius: 2px; }
+  .turn { position: absolute; top: 0; bottom: 0; border-radius: 2px; }
+  #playhead { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--fg); pointer-events: none; }
+  main { max-width: 900px; margin: 0 auto; padding: 8px 16px 48px; }
+  .seg { display: grid; grid-template-columns: 56px 1fr; gap: 4px 12px; padding: 8px; border-radius: 8px; cursor: pointer; }
+  .seg:hover { background: var(--now); }
+  .seg.now { background: var(--now); }
+  .seg.diff { background: var(--mark); }
+  .time { color: var(--sub); font-variant-numeric: tabular-nums; }
+  .who { font-weight: 600; }
+  .why { grid-column: 2; color: var(--sub); font-size: 12px; }
+  .badge { font-size: 12px; font-weight: 600; margin-left: 8px; color: #b35c00; }
+</style>
+</head>
+<body>
+<header>
+  <label>transcript.json <input type="file" id="json" accept=".json"></label>
+  <label>音声 <input type="file" id="audio" accept="audio/*,video/*"></label>
+  <label><input type="checkbox" id="onlyDiff"> 決め方で話者が変わる発言だけ</label>
+  <div id="summary">transcript.json を選んでください</div>
+  <audio id="player" controls></audio>
+  <div id="timeline"><div id="playhead"></div></div>
+</header>
+<main id="list"></main>
+<script>
+// 話者の色（アプリと同じ 8 色。speaker_0 から順に）
+const COLORS = ["#2f6bc2", "#ad5002", "#037e3f", "#7d56b8", "#047887", "#b5414d", "#876904", "#a84482"];
+const player = document.getElementById("player");
+let data = null;
+
+// speaker_3 → 話者D（Nemotron は話し始めた順に番号を振るので、アプリと同じく A, B, … にする）
+const index = (speaker) => Number(speaker.split("_").pop());
+const name = (speaker) => "話者" + String.fromCharCode(65 + index(speaker));
+const color = (speaker) => COLORS[index(speaker) % COLORS.length];
+const time = (sec) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, "0")}`;
+
+document.getElementById("json").onchange = async (e) => {
+  data = JSON.parse(await e.target.files[0].text());
+  render();
+};
+document.getElementById("audio").onchange = (e) => { player.src = URL.createObjectURL(e.target.files[0]); };
+document.getElementById("onlyDiff").onchange = render;
+
+function render() {
+  if (!data) return;
+  const onlyDiff = document.getElementById("onlyDiff").checked;
+  const total = data.progress.total_sec;
+  const speakers = [...new Set(data.diarization.map((t) => t.speaker))].sort((a, b) => index(a) - index(b));
+  const diffs = data.segments.filter((s) => s.speaker_by_overlap && s.speaker_by_overlap !== s.speaker);
+
+  document.getElementById("summary").textContent =
+    `${data.label} ・ 発言 ${data.segments.length} ・ 話者 ${speakers.length} 人 ・ ` +
+    `時間の重なりだけで決めると話者が変わる発言 ${diffs.length}` + (data.progress.final ? "" : " ・ 途中結果");
+
+  // タイムライン: 話者ごとの段に、話者分離の区間を並べる
+  const timeline = document.getElementById("timeline");
+  timeline.querySelectorAll(".lane").forEach((el) => el.remove());
+  for (const speaker of speakers) {
+    const lane = document.createElement("div");
+    lane.className = "lane";
+    lane.title = name(speaker);
+    for (const t of data.diarization.filter((t) => t.speaker === speaker)) {
+      const turn = document.createElement("div");
+      turn.className = "turn";
+      turn.style.left = `${(t.start / total) * 100}%`;
+      turn.style.width = `${((t.end - t.start) / total) * 100}%`;
+      turn.style.background = color(speaker);
+      lane.appendChild(turn);
+    }
+    timeline.insertBefore(lane, document.getElementById("playhead"));
+  }
+  timeline.onclick = (e) => seek((e.offsetX / timeline.clientWidth) * total);
+
+  // 発言の一覧
+  const list = document.getElementById("list");
+  list.innerHTML = "";
+  for (const s of onlyDiff ? diffs : data.segments) {
+    const row = document.createElement("div");
+    row.className = "seg" + (s.speaker_by_overlap && s.speaker_by_overlap !== s.speaker ? " diff" : "");
+    row.dataset.start = s.start;
+    row.dataset.end = s.end;
+    const probs = Object.entries(s.prob_by_speaker).sort((a, b) => b[1] - a[1])
+      .map(([sp, p]) => `${name(sp)} ${p.toFixed(2)}`).join("・");
+    const overlaps = Object.entries(s.overlap_by_speaker).sort((a, b) => b[1] - a[1])
+      .map(([sp, sec]) => `${name(sp)} ${sec.toFixed(1)}秒`).join("・");
+    row.innerHTML = `
+      <div class="time">${time(s.start)}</div>
+      <div><span class="who" style="color:${color(s.speaker)}">${name(s.speaker)}</span>${
+        row.classList.contains("diff") ? `<span class="badge">重なりだけなら ${name(s.speaker_by_overlap)}</span>` : ""}</div>
+      <div></div><div class="text"></div>
+      <div class="why">発話確率の平均: ${probs || "—"}<br>区間の重なり: ${overlaps || "—"}</div>`;
+    row.querySelector(".text").textContent = s.text;
+    row.onclick = () => seek(s.start);
+    list.appendChild(row);
+  }
+}
+
+function seek(sec) {
+  if (!player.src) return;
+  player.currentTime = sec;
+  player.play();
+}
+
+// 再生位置: タイムラインの線を動かし、今の発言に印を付ける
+player.ontimeupdate = () => {
+  if (!data) return;
+  const now = player.currentTime;
+  document.getElementById("playhead").style.left = `${(now / data.progress.total_sec) * 100}%`;
+  for (const row of document.querySelectorAll(".seg")) {
+    row.classList.toggle("now", now >= row.dataset.start && now < row.dataset.end);
+  }
+};
+</script>
+</body>
+</html>
