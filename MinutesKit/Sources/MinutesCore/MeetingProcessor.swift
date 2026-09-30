@@ -128,7 +128,8 @@ public actor MeetingProcessor {
         for (n, chunk) in plan.enumerated() {
             try Task.checkCancellation()
             let piece = Array(samples[Int(chunk.start * Self.sampleRate)..<min(Int(chunk.end * Self.sampleRate), samples.count)])
-            let segments = try await whisper.transcribe(piece)
+            // 誰も話していない区切りは文字起こしをしない（無音に Whisper が幻の文を出すため。処理も速くなる）
+            let segments = timeline.hasSpeech(chunk.start, chunk.end) ? try await whisper.transcribe(piece) : []
             let words = timeline.assign(segments, offset: chunk.start, firstSeg: whisperSegments)
             whisperSegments += segments.count
             transcript.segments += timeline.utterances(words, firstID: transcript.segments.count)

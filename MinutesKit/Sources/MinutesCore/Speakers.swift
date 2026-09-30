@@ -2,6 +2,8 @@
 //   - 話者は Whisper の区間（おおむね文）ごとに、区間内の発話確率の合計が最大の話者。
 //     Whisper の語の時刻は区間の端でずれやすく、語ごとに決めると端の 1〜2 語が隣の話者になるため
 //   - 発言は「話者の交代」「文末」「長い無音」で区切る
+//   - 誰も話していない所の区間は捨てる。無音に Whisper が「ご視聴ありがとうございました」などの幻の文を出し、
+//     それを誰かの発言にしてしまうため。相槌や声の重なりは発話確率が 0.5 に届かないことがあるので、0.2 で判定する
 //   - 笑い声などで Whisper が同じ文字を出し続けたとき（「wwww…」「フフフ…」）は、maxRepeat 文字で切る
 
 import Diarization
@@ -57,6 +59,12 @@ struct SpeakerTimeline {
         return probs[min(f0, probs.count)..<min(f1, probs.count)]
     }
 
+    /// 区間の中で誰かが話しているか（発話確率が 0.2 以上のフレームがあるか。相槌や声の重なりは 0.5 に届かないことがあり、
+    /// 無音はほぼ 0 なので、話者区間を作る基準の 0.5 より低くする）
+    func hasSpeech(_ start: Double, _ end: Double) -> Bool {
+        frames(start, end).contains { $0.contains { $0 >= 0.2 } }
+    }
+
     /// 区間内で発話確率の合計が最大の話者（segment_speaker。同じなら番号の小さい方）
     func dominantSpeaker(_ start: Double, _ end: Double) -> String {
         var sums = [Float](repeating: 0, count: speakers)
@@ -68,6 +76,7 @@ struct SpeakerTimeline {
     /// offset は区切りの開始秒、firstSeg は区間の通し番号の始まり
     func assign(_ segments: [WhisperSegment], offset: Double, firstSeg: Int) -> [SpokenWord] {
         segments.enumerated().flatMap { k, s -> [SpokenWord] in
+            guard hasSpeech(s.start + offset, s.end + offset) else { return [] }  // 誰も話していない所の幻の文
             let speaker = dominantSpeaker(s.start + offset, s.end + offset)
             return clampRepeats(s.words).map {
                 SpokenWord(text: $0.text, start: round2($0.start + offset), end: round2($0.end + offset), seg: firstSeg + k, speaker: speaker)
