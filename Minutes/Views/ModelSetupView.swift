@@ -8,10 +8,10 @@ struct ModelSetupView: View {
         VStack(spacing: 0) {
             AppMark(size: 64)
                 .padding(.bottom, 22)
-            Text("はじめに、モデルをダウンロードします")
+            Text("モデルをダウンロードします")
                 .font(.system(size: 26, weight: .bold))
                 .padding(.bottom, 10)
-            Text("話者の聞き分け・文字起こし・発言の整形に使うモデルを、初回だけ Hugging Face から取得します。\n録音の処理はすべてこの Mac の中で行われ、録音が外部に送信されることはありません。")
+            Text("話者の聞き分け・文字起こし・発言の整形に使うモデルのうち、まだ無いものを Hugging Face から取得します。\n録音の処理はすべてこの Mac の中で行われ、録音が外部に送信されることはありません。")
                 .font(.system(size: 14))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

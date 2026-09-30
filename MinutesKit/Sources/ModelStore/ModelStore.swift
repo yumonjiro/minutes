@@ -21,16 +21,32 @@ public struct ModelStore: Sendable {
                 "nemotron_3_diarization.mlpackage/Data/com.apple.CoreML/model.mlmodel",
                 "nemotron_3_diarization.mlpackage/Data/com.apple.CoreML/weights/weight.bin",
                 "learnable_sil_emb.f32"])
-    /// 文字起こし: Whisper large-v3（transformers の形式の重みを、読み込むときに MLX の形に読み替える）
-    public static let whisper = Model(
-        repo: "openai/whisper-large-v3", revision: "06f233fe06e710322aca913c1bc4249a0d71fce1",
-        files: ["config.json", "generation_config.json", "model.safetensors", "tokenizer.json", "tokenizer_config.json"])
+    /// 文字起こしのモデル（transformers の形式の重みを、読み込むときに MLX の形に読み替える）。
+    /// turbo は large-v3 のデコーダーを 32 層から 4 層に減らしたもので、約 3 倍速くメモリも少ないが、聞き違いが増える
+    public enum Whisper: String, CaseIterable, Sendable {
+        case turbo, large
+
+        public var model: Model {
+            let files = ["config.json", "generation_config.json", "model.safetensors", "tokenizer.json", "tokenizer_config.json"]
+            return switch self {
+            case .turbo: Model(repo: "openai/whisper-large-v3-turbo", revision: "41f01f3fe87f28c78e2fbf8b568835947dd65ed9", files: files)
+            case .large: Model(repo: "openai/whisper-large-v3", revision: "06f233fe06e710322aca913c1bc4249a0d71fce1", files: files)
+            }
+        }
+
+        public var name: String {
+            switch self {
+            case .turbo: "Whisper large-v3-turbo"
+            case .large: "Whisper large-v3"
+            }
+        }
+    }
+
     /// 発言の整形: Gemma 4 E2B のテキスト専用版（MLX の int4）
     public static let tidier = Model(
         repo: "mlx-community/Gemma4-E2B-IT-Text-int4", revision: "61d85e83c959ac93109dc5be7104c8de9942ef66",
         files: ["config.json", "generation_config.json", "model.safetensors", "model.safetensors.index.json",
                 "tokenizer.json", "tokenizer_config.json", "chat_template.jinja"])
-    public static let all = [diarizer, whisper, tidier]
 
     /// 取得したモデルの場所
     public struct Paths: Sendable {
@@ -40,11 +56,14 @@ public struct ModelStore: Sendable {
         public var tidier: URL
     }
 
+    /// 使う文字起こしのモデル
+    public let whisper: Whisper
     private let cache: HubCache
     private let client: HubClient
 
     /// cacheDirectory: モデルを置くフォルダ。nil なら Hugging Face の標準のキャッシュ（HF_HUB_CACHE か ~/.cache/huggingface/hub）
-    public init(cacheDirectory: URL? = nil) {
+    public init(cacheDirectory: URL? = nil, whisper: Whisper = .turbo) {
+        self.whisper = whisper
         cache = cacheDirectory.map { HubCache(cacheDirectory: $0) } ?? .default
         // 公開のリポジトリだけなので、手元の Hugging Face のトークンは送らない
         client = HubClient(host: HubClient.defaultHost, cache: cache)
@@ -54,18 +73,21 @@ public struct ModelStore: Sendable {
         let diarizer = folder(Self.diarizer)
         return Paths(diarizer: diarizer.appending(path: "nemotron_3_diarization.mlpackage"),
                      silenceEmbedding: diarizer.appending(path: "learnable_sil_emb.f32"),
-                     whisper: folder(Self.whisper), tidier: folder(Self.tidier))
+                     whisper: folder(whisper.model), tidier: folder(Self.tidier))
     }
+
+    /// 使うモデル（話者分離・文字起こし・整形）
+    private var models: [Model] { [Self.diarizer, whisper.model, Self.tidier] }
 
     /// すべてのファイルがそろっているか（ネットワークは使わない）
     public var isComplete: Bool {
-        Self.all.allSatisfy(isComplete)
+        models.allSatisfy(isComplete)
     }
 
     /// 足りないモデルを取得する。progress には取得済みの割合（0〜1、バイト数で重み付け）を渡す。
     /// 途中で止めても、取得を終えたファイルは次に使い回す
     public func download(progress: @escaping @MainActor @Sendable (Double) -> Void) async throws {
-        let missing = Self.all.filter { !isComplete($0) }
+        let missing = models.filter { !isComplete($0) }
         var sizes: [Int64] = []
         for model in missing { sizes.append(try await size(of: model)) }
         let total = Double(max(sizes.reduce(0, +), 1))
@@ -84,7 +106,7 @@ public struct ModelStore: Sendable {
     /// 取得するファイルの合計の大きさ（バイト）
     public func downloadSize() async throws -> Int64 {
         var total: Int64 = 0
-        for model in Self.all where !isComplete(model) { total += try await size(of: model) }
+        for model in models where !isComplete(model) { total += try await size(of: model) }
         return total
     }
 

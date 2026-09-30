@@ -14,8 +14,8 @@
 ## 動作環境
 
 - Apple Silicon の Mac、macOS 15 以降
-- メモリ 8GB 以上（文字起こし中は最大 約 3.9GB を使う）
-- 初回にモデル（合計 約 6GB）を Hugging Face からダウンロードする
+- メモリ 8GB 以上（文字起こし中は最大 約 2.4GB を使う。精度優先の large-v3 を選ぶと約 3.9GB）
+- 初回にモデル（合計 約 4.5GB）を Hugging Face からダウンロードする（精度優先の large-v3 を選ぶと、さらに約 3.1GB）
 
 ## ビルドと実行
 
@@ -35,7 +35,7 @@ open build/Minutes.app
      ─▶ 話者分離: Nemotron-3-Diarization（Core ML）で、80 ms ごとに最大 8 話者の発話確率を出す
      ─▶ 区切り: 全員の発話確率が 0.5 未満の状態が 0.4 秒以上続く所（無音）の中央で区切る。
               区切りは 5 → 10 → 20 → 40 → 60 秒とだんだん長くして、最初の発言が画面に表示されるまでの時間を短縮する
-     ─▶ 文字起こし: Whisper large-v3 で区切りごとに、語ごとの時刻付きで文字にする
+     ─▶ 文字起こし: Whisper large-v3-turbo（設定で large-v3 も選べる）で区切りごとに、語ごとの時刻付きで文字にする
      ─▶ 話者の割り当て: Whisper の区間（おおむね文）ごとに、区間内の発話確率の合計が最大の話者
      ─▶ 発言: 話者の交代・文末・長い無音で区切り、終わった区切りから画面に足していく
 ```
@@ -50,7 +50,7 @@ open build/Minutes.app
 | 用途       | モデル                                                                                                                                                                                                           | ライセンス  |
 | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
 | 話者分離   | [altic-dev/nemotron-3-diarization-coreml](https://huggingface.co/altic-dev/nemotron-3-diarization-coreml)（[nvidia/Nemotron-3-Diarization](https://huggingface.co/nvidia/Nemotron-3-Diarization) の Core ML 版） | OpenMDW-1.1 |
-| 文字起こし | [openai/whisper-large-v3](https://huggingface.co/openai/whisper-large-v3)（読み込むときに MLX の形へ読み替える）                                                                                                 | Apache-2.0  |
+| 文字起こし | [openai/whisper-large-v3-turbo](https://huggingface.co/openai/whisper-large-v3-turbo)（既定）、[openai/whisper-large-v3](https://huggingface.co/openai/whisper-large-v3)（設定で選べる）。読み込むときに MLX の形へ読み替える | Apache-2.0 |
 | 発言の整形 | [mlx-community/Gemma4-E2B-IT-Text-int4](https://huggingface.co/mlx-community/Gemma4-E2B-IT-Text-int4)                                                                                                            | Apache-2.0  |
 
 ## コードの構成
@@ -82,7 +82,7 @@ open build/Minutes.app
 scripts/build-cli.sh                                   # build/cli/ に diarize・transcribe・tidy を作る
 
 build/cli/diarize meeting.m4a --out diarization.json   # 話者分離だけ（話者ごとの発話確率と発話区間）
-build/cli/transcribe meeting.m4a --out transcript.json # 話者分離 → 文字起こし → 話者の割り当て（アプリと同じ結果）
+build/cli/transcribe meeting.m4a --out transcript.json # 話者分離 → 文字起こし → 話者の割り当て（アプリと同じ結果。--model large で large-v3）
 build/cli/tidy transcript.json                         # 発言の整形（消した所を ⟦ ⟧ で囲んで表示）
 
 jq -r '.segments[] | "\(.start)s \(.speaker): \(.text)"' transcript.json   # 発言を 1 行ずつ出す
@@ -131,14 +131,14 @@ jq -r '.segments[] | "\(.start)s \(.speaker): \(.text)"' transcript.json   # 発
    - Whisper の文区間全体でこの発話確率を合算（積分）する方式としたことで、声紋抽出という不安定な中間ステップを挟まず、相槌が重なっていても文全体で優勢な話者が確率的に自然と選ばれるようになった。
    - なお、単語単位での割り当ては Whisper の単語タイムスタンプの揺らぎに弱かったため、文（セグメント）単位で集計している。
 
-### 文字起こしモデル: Whisper large-v3
+### 文字起こしモデル: 既定は Whisper large-v3-turbo、設定で large-v3
 
-MLX 向けモデルを比較。新しい Qwen3-ASR は公開ベンチマークの成績が良いとされるが、自前で用意した日本語音声では Whisper 系の出力が文章として安定していたため、議事録の品質を最優先して large-v3 を採用した。
+MLX 向けモデルを比較。新しい Qwen3-ASR は公開ベンチマークの成績が良いとされるが、自前で用意した日本語音声では Whisper 系の出力が文章として安定していたため、Whisper を採用した。精度と速さには明確な兼ね合いがあるので、既定は待ち時間の短い turbo にし、設定で精度優先の large-v3 を選べるようにした。アプリでの計測（12 分の録音）では、文字起こしが turbo で 76 秒・最初の発言まで 2.9 秒・メモリ最大 2.4GB、large-v3 で約 4 分・メモリ最大 3.9GB だった。
 
 | モデル                                                                         | 発表年 | 12 分の処理時間 | 所見                                                                                                                                |
 | ------------------------------------------------------------------------------ | :----: | --------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| Whisper large-v3（mlx-whisper、GPU）                                           |  2023  | 249 秒          | 採用。文単位で自然に区切られて出力されるため、議事録として読みやすい。精度も十分。                                                  |
-| [Whisper large-v3-turbo](https://huggingface.co/openai/whisper-large-v3-turbo) |  2024  | 105 秒          | 約 1/3 の処理時間・メモリ 2.4GB（large-v3 は 3.9GB）。large-v3 と比較して、意味の変わる聞き違いや、ハルシネーションが多く発生した。 |
+| Whisper large-v3（mlx-whisper、GPU）                                           |  2023  | 249 秒          | 精度優先（設定で選べる）。文単位で自然に区切られて出力されるため、議事録として読みやすい。精度も十分。                                                  |
+| [Whisper large-v3-turbo](https://huggingface.co/openai/whisper-large-v3-turbo) |  2024  | 105 秒          | 既定。約 1/3 の処理時間・メモリ 2.4GB（large-v3 は 3.9GB）。large-v3 と比較して、意味の変わる聞き違いや、ハルシネーションが多く発生した。 |
 | [Whisper medium](https://huggingface.co/openai/whisper-medium)                 |  2022  | —               | large-v3 との体感差は小さかった。                                                                                                   |
 | [Qwen3-ASR-1.7B](https://huggingface.co/Qwen/Qwen3-ASR-1.7B)（MLX）            |  2026  | 266 秒          | 1音ごとの聞き取りは正確だが、文区切りのない語単位出力となるため、文として連結した際に Whisper と比べて可読性が劣った。              |
 

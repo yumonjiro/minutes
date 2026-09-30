@@ -29,6 +29,8 @@ struct MinutesApp: App {
             }
             // モデルがそろってから、Finder などから渡された音声ファイルを受け付ける
             .onChange(of: setup.isReady, initial: true) { if setup.isReady { delegate.library = library } }
+            // 文字起こしのモデルを選び直し、そろったら処理に使うモデルを替える
+            .onChange(of: setup.isReady ? setup.whisper : nil) { if setup.isReady { library.useWhisper(setup.store) } }
             .onChange(of: appearance, initial: true) { appearance.apply() }
         }
         .defaultSize(width: 1200, height: 800)
@@ -50,6 +52,7 @@ struct MinutesApp: App {
 
         Settings {
             SettingsView()
+                .environment(setup)
         }
     }
 }

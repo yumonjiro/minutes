@@ -1,5 +1,6 @@
 // 文字起こしの CLI（MinutesCore の動作確認用。アプリと同じ結果ファイルを区切りごとに書き換える）
-//   transcribe <音声ファイル> --out result.json [--cache-limit MB] [--memory-limit MB] [--memlog memory.tsv]
+//   transcribe <音声ファイル> --out result.json [--model turbo|large] [--cache-limit MB] [--memory-limit MB] [--memlog memory.tsv]
+// --model は文字起こしのモデル（既定は turbo。large は large-v3）
 // モデルは既定でアプリと同じもの（ModelStore。無ければ Hugging Face から取得する）を使う
 // メモリの確認用: 0.25 秒ごとにプロセスのメモリ（phys_footprint）と MLX の active・cache を測り、段階・区切りごとと全体の最大を出す。
 //   --cache-limit/--memory-limit は MLX の Memory.cacheLimit/memoryLimit を変える（cacheLimit は文字起こしを始めるときに変える）。
@@ -16,14 +17,18 @@ while let argument = arguments.next() {
     if argument.hasPrefix("--") { options[argument] = arguments.next() } else { files.append(argument) }
 }
 guard let audio = files.first.map(URL.init(fileURLWithPath:)), let out = options["--out"].map(URL.init(fileURLWithPath:)) else {
-    print("usage: transcribe <audio file> --out result.json [--cache-limit MB] [--memory-limit MB] [--memlog memory.tsv]")
+    print("usage: transcribe <audio file> --out result.json [--model turbo|large] [--cache-limit MB] [--memory-limit MB] [--memlog memory.tsv]")
     exit(1)
 }
-let models = try await ModelStore().pathsDownloadingIfNeeded()
+guard let variant = ModelStore.Whisper(rawValue: options["--model"] ?? "turbo") else {
+    print("--model は turbo か large")
+    exit(1)
+}
+let models = try await ModelStore(whisper: variant).pathsDownloadingIfNeeded()
 
 let processor = MeetingProcessor(
     models: .init(diarizer: models.diarizer, silenceEmbedding: models.silenceEmbedding,
-                  whisper: models.whisper))
+                  whisper: models.whisper, whisperName: variant.name))
 
 if let mb = options["--memory-limit"].flatMap(Int.init) { Memory.memoryLimit = mb * 1_048_576 }
 print("MLX memoryLimit \(megabytes(Memory.memoryLimit)) MB, cacheLimit \(megabytes(Memory.cacheLimit)) MB,"

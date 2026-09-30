@@ -26,9 +26,16 @@ final class Library {
         root = support.appending(component: "Recordings")
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         processor = MeetingProcessor(models: .init(
-            diarizer: models.paths.diarizer, silenceEmbedding: models.paths.silenceEmbedding, whisper: models.paths.whisper))
+            diarizer: models.paths.diarizer, silenceEmbedding: models.paths.silenceEmbedding, whisper: models.paths.whisper,
+            whisperName: models.whisper.name))
         tidy = TidyService(modelFolder: models.paths.tidier)
         load()
+    }
+
+    /// 文字起こしのモデルを替える（設定で選び直し、そのモデルがそろったとき）。処理中の録音はそのまま終える
+    func useWhisper(_ models: ModelStore) {
+        let processor = processor
+        Task { await processor.useWhisper(models.paths.whisper, name: models.whisper.name) }
     }
 
     func recording(_ id: String) -> Recording? { recordings.first { $0.id == id } }

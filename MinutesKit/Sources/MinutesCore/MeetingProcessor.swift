@@ -13,13 +13,16 @@ public actor MeetingProcessor {
         public var diarizer: URL
         /// 話者キャッシュの無音の埋め込み（learnable_sil_emb.f32）
         public var silenceEmbedding: URL
-        /// Whisper large-v3（openai/whisper-large-v3 の重み・設定・トークナイザーのあるフォルダ）
+        /// Whisper（openai/whisper-large-v3 などの重み・設定・トークナイザーのあるフォルダ）
         public var whisper: URL
+        /// 結果に書く Whisper のモデルの名前（「Whisper large-v3-turbo」など）
+        public var whisperName: String
 
-        public init(diarizer: URL, silenceEmbedding: URL, whisper: URL) {
+        public init(diarizer: URL, silenceEmbedding: URL, whisper: URL, whisperName: String) {
             self.diarizer = diarizer
             self.silenceEmbedding = silenceEmbedding
             self.whisper = whisper
+            self.whisperName = whisperName
         }
     }
 
@@ -41,9 +44,8 @@ public actor MeetingProcessor {
 
     private static let sampleRate = 16000.0
 
-    private let models: Models
-    private let asr = "Whisper large-v3（MLX）"  // 結果に書く文字起こしの名前
-    private let whisper: WhisperTranscriber
+    private var models: Models
+    private var whisper: WhisperTranscriber
     private var queue: Task<Void, Never>?  // 処理は 1 件ずつ（Whisper を同時に使わない）
 
     public init(models: Models) {
@@ -69,12 +71,30 @@ public actor MeetingProcessor {
         return stream
     }
 
-    /// Whisper を外してメモリを空ける（整形のモデルを使う前など）。処理中ならその後で外す。次の処理で読み直す
-    public func unloadWhisper() async {
-        let previous = queue, whisper = whisper
+    /// 文字起こしのモデルを替える（設定で選び直したとき）。処理中ならその後で替える
+    public func useWhisper(_ folder: URL, name: String) async {
+        let previous = queue
         let job = Task {
             await previous?.value
-            await whisper.unload()
+            await replaceWhisper(folder, name: name)
+        }
+        queue = job
+        await job.value
+    }
+
+    private func replaceWhisper(_ folder: URL, name: String) async {
+        await whisper.unload()
+        whisper = WhisperTranscriber(folder: folder)
+        models.whisper = folder
+        models.whisperName = name
+    }
+
+    /// Whisper を外してメモリを空ける（整形のモデルを使う前など）。処理中ならその後で外す。次の処理で読み直す
+    public func unloadWhisper() async {
+        let previous = queue
+        let job = Task {
+            await previous?.value
+            await self.whisper.unload()  // 外す時点のモデル（途中で替えていれば新しいほう）
         }
         queue = job
         await job.value
@@ -96,7 +116,7 @@ public actor MeetingProcessor {
         try Task.checkCancellation()
 
         let timeline = SpeakerTimeline(diarization)
-        var transcript = Transcript(audio: audio.lastPathComponent, asr: asr, timeline: timeline, totalSec: total)
+        var transcript = Transcript(audio: audio.lastPathComponent, asr: "\(models.whisperName)（MLX）", timeline: timeline, totalSec: total)
         transcript.timingsSec.diarize = diarizeSec
         if await !whisper.isLoaded { events.yield(.stage(.loadingWhisper)) }
         let start = ContinuousClock.now
